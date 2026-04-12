@@ -1,20 +1,20 @@
 {
-  "plugin_name": "YourPlugin",
-  "plugin_formats": ["VST3", "CLAP", "AU", "AAX", "Standalone"],
+  "plugin_name": "FarAway",
+  "plugin_formats": ["VST3", "AU", "AAX", "Standalone"],
   "build_dir": "build",
-  "cmake_generator": "Ninja",
+  "cmake_generator": "Makefile",
   "cmake_extra_args": [],
 
   "signing_identity_adhoc": "-",
-  "signing_identity_full": "Developer ID Application: Your Name (TEAMID)",
-  "installer_identity": "Developer ID Installer: Your Name (TEAMID)",
-  "apple_id": "you@example.com",
-  "team_id": "TEAMID",
-  "notarization_keychain_profile": "notarize-profile",
+  "signing_identity_full": "Developer ID Application: Bombest, LLC (8C4A8V568P)",
+  "installer_identity": "Developer ID Installer: Bombest, LLC (8C4A8V568P)",
+  "apple_id": "thomasphillips3@gmail.com",
+  "team_id": "8C4A8V568P",
+  "notarization_keychain_profile": "bombest-notarize",
 
-  "s3_bucket": "your-builds-bucket",
+  "s3_bucket": "bombest-releases",
   "s3_region": "us-east-1",
-  "site_url": "https://builds.yourdomain.com",
+  "site_url": "https://bom.best/",
 
   "branches": {
     "release": "main",
