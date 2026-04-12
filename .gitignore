@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+Builds/
+logs/
+backups/
+
+# Cache
+.claude/cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# OS files
+.DS_Store
+
+# Prompts
+prompts/
+
+# Personal todos
+TO-DOS.md

@@ -1,0 +1,9 @@
+# Backup archives from cleanup operations
+# Created by /reset-to-ideation and /destroy commands
+
+# Keep the backup files locally but don't commit them
+*.tar.gz
+*_entry.md
+
+# Keep directory structure
+!.gitignore

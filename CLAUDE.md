@@ -4,7 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This is the **Bombest Plugin Builder** — a build, signing, versioning, and deployment framework for JUCE audio plugins. It is **not a complete plugin project**. The consuming project provides its own `CMakeLists.txt`, `src/`, and `libs/JUCE`. This repo supplies the scripts and Claude skills that wrap them.
+This repo combines two systems:
+
+1. **Plugin Freedom System (PFS)** — an AI-assisted JUCE plugin development platform. Create plugins through conversation: `/dream` → `/plan` → `/implement` → `/improve`. Plugins live in `plugins/`, registered in `PLUGINS.md`.
+2. **Bombest Build Framework** — production build/sign/deploy/version infrastructure wrapping CMake + JUCE with S3 distribution. Config in `build.json`.
+
+The `plugins/` directory contains plugin projects (each with their own `CMakeLists.txt` + `Source/`). The root `CMakeLists.txt` scans and builds all of them.
+
+## Git Remotes
+
+- `origin` → `https://github.com/thomasphillips3/bombest-plugin-builder` (push target)
+- `upstream` → `https://github.com/glittercowboy/plugin-freedom-system` (pull PFS updates)
+
+To pull upstream PFS changes: `git fetch upstream && git merge upstream/main`
 
 ## Build System
 - **Framework**: JUCE (v7.x) with CMake
@@ -53,6 +65,45 @@ Builds deploy to a static S3 site. Config in `build.json`.
 
 - **Primary**: `CMakeLists.txt` → `PROJECT_VERSION` variable
 - **Secondary**: `src/PluginInfo.h` → `PLUGIN_VERSION_STRING` define (auto-synced by version script)
+
+## Plugin Freedom System (PFS)
+
+### Plugin Workflow Commands
+
+| Command | Purpose |
+|---------|---------|
+| `/dream [PluginName]` | Ideate — explore concepts, no implementation |
+| `/plan [PluginName]` | Design architecture and parameter spec |
+| `/implement [PluginName]` | Stages 1–4: foundation → DSP → UI → validation |
+| `/improve [PluginName]` | Enhance a working plugin |
+| `/test [PluginName]` | Run quality validation |
+| `/package [PluginName]` | Create distribution installers |
+| `/setup` | Validate dev environment dependencies |
+| `/continue` | Resume from an interruption |
+| `/reconcile` | Fix state inconsistencies |
+
+### PFS Agent System
+
+Eight specialized subagents in `.claude/agents/` handle discrete stages: `foundation-shell-agent` (JUCE scaffolding), `dsp-agent` (audio processing), `gui-agent` (low-level UI code), `ui-design-agent` (visual/UX design), `ui-finalization-agent` (polish), `validation-agent` (quality gates), `research-planning-agent`, `troubleshoot-agent`.
+
+### Lifecycle Hooks
+
+Defined in `.claude/settings.json`, run by the Claude Code harness:
+- **SessionStart** — validates dev environment (CMake, JUCE, codesign, etc.)
+- **PostToolUse** — JUCE best-practice validation after file writes
+- **PreCompact** — preserves contract files before context compaction
+
+### Plugin Registry
+
+`PLUGINS.md` is the central state file. Every plugin has a status, stage (0–5), and version. Each plugin directory requires a `NOTES.md` with lifecycle documentation.
+
+### Preferences
+
+`.claude/preferences.json` controls workflow mode:
+- `"mode": "express"` — auto-advance stages
+- `"mode": "manual"` — show menus at each stage (default)
+
+---
 
 ## Bombest Skills
 
