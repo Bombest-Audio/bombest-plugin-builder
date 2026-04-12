@@ -1,0 +1,41 @@
+You are assisting with an audio plugin project built with CMake + JUCE.
+
+## Project context
+
+This is a JUCE-based audio plugin that builds to VST3, CLAP, AU, AAX, and Standalone formats. The build, signing, deployment, and versioning are managed by the "bombest" skill and script system.
+
+## Key files
+
+- `build.json` — all build configuration (signing identities, S3 bucket, formats, paths)
+- `CMakeLists.txt` — build system definition and version source of truth
+- `scripts/bombest-*.sh` — deterministic shell scripts for build operations
+- `.claude/skills/bombest-*` — AI skill definitions for build workflows
+
+## Build tiers
+
+- **dev**: Debug config, unsigned, for local testing
+- **alpha**: Release config, ad hoc signed, for tester distribution
+- **release**: Release config, fully signed + Apple notarized, for public distribution
+
+## When helping with build/deploy tasks
+
+1. Check `build.json` for current configuration
+2. Use the `bombest-*` shell scripts — they are the canonical build commands
+3. Never modify signing commands or codesign invocations without explicit confirmation
+4. Never change version numbers without the user asking
+
+## When helping with plugin code
+
+- C++17 standard
+- JUCE coding conventions (PascalCase classes, camelCase methods)
+- Audio processing code in `src/`
+- The plugin processor and editor follow JUCE's standard pattern
+
+## Bombest commands (Claude Code)
+
+If the user asks about building, signing, deploying, or versioning in a terminal context, point them to:
+- `/bombest-build` — build binaries
+- `/bombest-sign` — code sign + notarize
+- `/bombest-deploy` — deploy to S3
+- `/bombest-version` — version management
+- `/bombest-release` — full pipeline
