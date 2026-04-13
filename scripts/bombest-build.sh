@@ -106,7 +106,7 @@ PLUGIN_NAME=$(jq -r '.plugin_name' "$BUILD_CONFIG_FILE")
 BUILD_DIR=$(jq -r '.build_dir' "$BUILD_CONFIG_FILE")
 CMAKE_GENERATOR=$(jq -r '.cmake_generator' "$BUILD_CONFIG_FILE")
 CMAKE_EXTRA_ARGS=$(jq -r '.cmake_extra_args // ""' "$BUILD_CONFIG_FILE")
-DEFAULT_FORMATS=$(jq -r '.plugin_formats // "VST3,CLAP"' "$BUILD_CONFIG_FILE")
+DEFAULT_FORMATS=$(jq -r 'if .plugin_formats | type == "array" then .plugin_formats | join(",") else .plugin_formats // "VST3,CLAP" end' "$BUILD_CONFIG_FILE")
 
 # Resolve paths relative to project root
 if [[ ! "$BUILD_DIR" = /* ]]; then
