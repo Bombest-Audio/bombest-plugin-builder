@@ -2,7 +2,7 @@
   "plugin_name": "FarAway",
   "plugin_formats": ["VST3", "AU", "AAX", "Standalone"],
   "build_dir": "build",
-  "cmake_generator": "Makefile",
+  "cmake_generator": "Unix Makefiles",
   "cmake_extra_args": [],
 
   "signing_identity_adhoc": "-",
