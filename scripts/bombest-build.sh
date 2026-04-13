@@ -42,6 +42,7 @@ log_warning() {
 FORMATS="all"
 CONFIG="Release"
 CLEAN_BUILD=false
+TIER="dev"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -57,17 +58,30 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --tier)
+            TIER="$2"
+            if [[ ! "$TIER" =~ ^(dev|alpha|release)$ ]]; then
+                log_error "Invalid tier: $TIER (must be dev, alpha, or release)"
+                exit 1
+            fi
+            shift 2
+            ;;
         --clean)
             CLEAN_BUILD=true
             shift
             ;;
         *)
             log_error "Unknown option: $1"
-            echo "Usage: $0 [--formats FORMAT1,FORMAT2,...] [--config Release|Debug] [--clean]"
+            echo "Usage: $0 [--formats FORMAT1,FORMAT2,...] [--config Release|Debug] [--tier dev|alpha|release] [--clean]"
             exit 1
             ;;
     esac
 done
+
+# Derive config from tier if not explicitly set
+if [[ "$TIER" == "dev" && "$CONFIG" == "Release" ]]; then
+    CONFIG="Debug"
+fi
 
 # Find project root (directory containing build.json)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -134,7 +148,14 @@ BUILD_START=$(date +%s)
 
 # CMake configure step
 log_info "Running CMake configure..."
-CMAKE_CMD="cmake -B \"$BUILD_DIR\" -G \"$CMAKE_GENERATOR\" -DCMAKE_BUILD_TYPE=\"$CONFIG\""
+# Read version from CMakeLists.txt in the parent plugin project
+PLUGIN_PROJECT_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
+BBM_VERSION=$(grep -m1 'project(.*VERSION' "$PLUGIN_PROJECT_ROOT/CMakeLists.txt" | sed 's/.*VERSION[[:space:]]*\([0-9.]*\).*/\1/')
+if [[ -z "$BBM_VERSION" ]]; then
+    BBM_VERSION="0.0.0"
+fi
+
+CMAKE_CMD="cmake -S \"$PLUGIN_PROJECT_ROOT\" -B \"$BUILD_DIR\" -G \"$CMAKE_GENERATOR\" -DCMAKE_BUILD_TYPE=\"$CONFIG\" -DBBM_BUILD_TYPE=\"$TIER\" -DBBM_VERSION=\"$BBM_VERSION\""
 
 if [[ -n "$CMAKE_EXTRA_ARGS" ]]; then
     CMAKE_CMD="$CMAKE_CMD $CMAKE_EXTRA_ARGS"
