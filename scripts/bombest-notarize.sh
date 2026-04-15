@@ -147,7 +147,7 @@ read_config() {
 }
 
 NOTARIZATION_KEYCHAIN_PROFILE=$(read_config "notarization_keychain_profile")
-BUILD_DIR=$(read_config "build_dir")
+BUILD_DIR="${PROJECT_ROOT}/$(read_config "build_dir")"
 PLUGIN_NAME=$(read_config "plugin_name")
 
 if [[ -z "$NOTARIZATION_KEYCHAIN_PROFILE" ]]; then
@@ -185,17 +185,12 @@ find_notarizable_binaries() {
         return 1
     fi
 
-    # Look for application bundles and plugin bundles
+    # Look for application bundles and plugin bundles (recursive — artifacts are in subdirs)
     while IFS= read -r -d '' file; do
         binaries+=("$file")
-    done < <(find "$BUILD_DIR" -maxdepth 1 \( -type d -name "*.app" -o -name "*.vst3" -o -name "*.clap" -o -name "*.component" -o -name "*.aaxplugin" \) -print0 2>/dev/null)
+    done < <(find "$BUILD_DIR" -type d \( -name "*.app" -o -name "*.vst3" -o -name "*.clap" -o -name "*.component" -o -name "*.aaxplugin" \) -print0 2>/dev/null)
 
-    # Also check for standalone executable
-    if [[ -f "$BUILD_DIR/${PLUGIN_NAME}" ]]; then
-        binaries+=("$BUILD_DIR/${PLUGIN_NAME}")
-    fi
-
-    for binary in "${binaries[@]}"; do
+    for binary in ${binaries[@]+"${binaries[@]}"}; do
         echo "$binary"
     done
 }

@@ -161,43 +161,37 @@ if [[ -n "$NOTES_FILE" ]]; then
     log_info "Included release notes"
 fi
 
-# Gather file information for manifest
-declare -A FORMAT_COUNTS
+# Gather file information for manifest (bash 3.2 compatible — no associative arrays)
 declare -a FILE_LIST
+COUNT_VST3=0; COUNT_CLAP=0; COUNT_AU=0; COUNT_AAX=0
 
 while IFS= read -r -d '' file; do
-    # Determine format from extension
     filename=$(basename "$file")
-
     if [[ "$file" == *.vst3* ]]; then
-        FORMAT_COUNTS["vst3"]=$((${FORMAT_COUNTS["vst3"]:-0} + 1))
-        FILE_LIST+=("${filename}|vst3")
+        COUNT_VST3=$((COUNT_VST3 + 1)); FILE_LIST+=("${filename}|vst3")
     elif [[ "$file" == *.clap* ]]; then
-        FORMAT_COUNTS["clap"]=$((${FORMAT_COUNTS["clap"]:-0} + 1))
-        FILE_LIST+=("${filename}|clap")
+        COUNT_CLAP=$((COUNT_CLAP + 1)); FILE_LIST+=("${filename}|clap")
     elif [[ "$file" == *.component* ]]; then
-        FORMAT_COUNTS["au"]=$((${FORMAT_COUNTS["au"]:-0} + 1))
-        FILE_LIST+=("${filename}|au")
+        COUNT_AU=$((COUNT_AU + 1)); FILE_LIST+=("${filename}|au")
     elif [[ "$file" == *.aaxplugin* ]]; then
-        FORMAT_COUNTS["aax"]=$((${FORMAT_COUNTS["aax"]:-0} + 1))
-        FILE_LIST+=("${filename}|aax")
+        COUNT_AAX=$((COUNT_AAX + 1)); FILE_LIST+=("${filename}|aax")
     fi
 done < <(find "$STAGING_DIR" -type f -print0)
 
 # Build formats array for manifest
 FORMATS_JSON="["
 first=true
-for format in "${!FORMAT_COUNTS[@]}"; do
-    if [[ "$first" == false ]]; then
-        FORMATS_JSON+=","
-    fi
-    FORMATS_JSON+="{\"format\":\"$format\",\"count\":${FORMAT_COUNTS[$format]}}"
+for pair in "vst3:$COUNT_VST3" "clap:$COUNT_CLAP" "au:$COUNT_AU" "aax:$COUNT_AAX"; do
+    fmt="${pair%%:*}"; cnt="${pair##*:}"
+    [[ "$cnt" -eq 0 ]] && continue
+    [[ "$first" == false ]] && FORMATS_JSON+=","
+    FORMATS_JSON+="{\"format\":\"$fmt\",\"count\":$cnt}"
     first=false
 done
 FORMATS_JSON+="]"
 
 # Calculate total size
-TOTAL_SIZE=$(du -sb "$STAGING_DIR" | awk '{print $1}')
+TOTAL_SIZE=$(find "$STAGING_DIR" -type f -exec stat -f%z {} \; | awk '{sum+=$1} END{print sum+0}')
 
 # Generate manifest.json
 MANIFEST_FILE="$STAGING_DIR/manifest.json"

@@ -3,6 +3,7 @@
 #
 # Bombest Plugin Builder - Static Site Index Generator
 # Generates a clean, modern HTML index and builds.json API for all plugin builds
+# bash 3.2 compatible (no associative arrays, no ${var^} uppercase expansion)
 #
 
 set -euo pipefail
@@ -70,15 +71,48 @@ trap "rm -rf '$TEMP_DIR'" EXIT
 HTML_FILE="$TEMP_DIR/index.html"
 JSON_FILE="$TEMP_DIR/builds.json"
 
-# Declare arrays for tiers
-declare -A TIER_VERSIONS
-declare -A TIER_DATES
-declare -A TIER_FORMATS
-declare -A TIER_SHAS
-declare -A TIER_LATEST
-TIER_VERSIONS[release]=""
-TIER_VERSIONS[alpha]=""
-TIER_VERSIONS[dev]=""
+# bash 3.2 compatible dynamic variable helpers.
+# Keys are sanitized: dots → underscores, so "1.5.2" becomes "1_5_2".
+
+# set_tier_data <tier> <version> <field> <value>
+set_tier_data() {
+    local key
+    key="TIERDATA_${1}_${2//./_}_${3}"
+    printf -v "$key" '%s' "$4"
+}
+
+# get_tier_data <tier> <version> <field>  (prints value or empty string)
+get_tier_data() {
+    local key val
+    key="TIERDATA_${1}_${2//./_}_${3}"
+    eval "val=\${${key}:-}"
+    echo "$val"
+}
+
+# set_tier_var <tier> <field> <value>
+set_tier_var() {
+    local key tier_upper
+    tier_upper=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+    key="TIERVAR_${tier_upper}_${2}"
+    printf -v "$key" '%s' "$3"
+}
+
+# get_tier_var <tier> <field>  (prints value or empty string)
+get_tier_var() {
+    local key tier_upper val
+    tier_upper=$(echo "$1" | tr '[:lower:]' '[:upper:]')
+    key="TIERVAR_${tier_upper}_${2}"
+    eval "val=\${${key}:-}"
+    echo "$val"
+}
+
+# capitalize_first <string>
+capitalize_first() {
+    local first rest
+    first=$(echo "${1:0:1}" | tr '[:lower:]' '[:upper:]')
+    rest="${1:1}"
+    echo "${first}${rest}"
+}
 
 # Scan S3 for all versions
 log_info "Scanning S3 for builds..."
@@ -98,6 +132,8 @@ for tier in "${TIERS[@]}"; do
 
         # Process versions in reverse order (newest first)
         version_array=($versions)
+        tier_vers=""
+        tier_latest_set=false
         for ((i=${#version_array[@]}-1; i>=0; i--)); do
             version="${version_array[$i]}"
 
@@ -109,38 +145,38 @@ for tier in "${TIERS[@]}"; do
             log_info "    Found version: $version"
 
             # Get manifest.json from S3
-            manifest_url="s3://${S3_BUCKET}/${PLUGIN_NAME}/${tier}/${version}/manifest.json"
             manifest=$(mktemp)
-            trap "rm -f '$manifest'" RETURN
 
-            if aws s3 cp "$manifest_url" "$manifest" --region "$S3_REGION" >/dev/null 2>&1; then
+            if aws s3 cp "s3://${S3_BUCKET}/${PLUGIN_NAME}/${tier}/${version}/manifest.json" \
+                "$manifest" --region "$S3_REGION" >/dev/null 2>&1; then
                 # Parse manifest
-                date=$(jq -r '.date' "$manifest" 2>/dev/null || echo "unknown")
+                date_val=$(jq -r '.date' "$manifest" 2>/dev/null || echo "unknown")
                 git_sha=$(jq -r '.git_sha' "$manifest" 2>/dev/null || echo "unknown")
                 formats=$(jq -r '.formats | map(.format) | join(", ")' "$manifest" 2>/dev/null || echo "unknown")
 
-                # Store in arrays
-                if [[ -z "${TIER_VERSIONS[$tier]}" ]]; then
-                    TIER_VERSIONS[$tier]="$version"
-                    TIER_LATEST[$tier]="$version"
+                set_tier_data "$tier" "$version" "date" "$date_val"
+                set_tier_data "$tier" "$version" "formats" "$formats"
+                set_tier_data "$tier" "$version" "sha" "$git_sha"
+
+                if [[ "$tier_latest_set" == false ]]; then
+                    set_tier_var "$tier" "LATEST" "$version"
+                    tier_latest_set=true
                 fi
-                TIER_VERSIONS[$tier]+=",$version"
-                TIER_DATES["${tier}_${version}"]="$date"
-                TIER_FORMATS["${tier}_${version}"]="$formats"
-                TIER_SHAS["${tier}_${version}"]="$git_sha"
+
+                if [[ -z "$tier_vers" ]]; then
+                    tier_vers="$version"
+                else
+                    tier_vers="$tier_vers,$version"
+                fi
             else
                 log_warn "    Could not read manifest for $version"
             fi
+            rm -f "$manifest"
         done
+
+        set_tier_var "$tier" "VERSIONS" "$tier_vers"
     else
         log_warn "    Failed to list versions for tier: $tier"
-    fi
-done
-
-# Clean up comma-prefixed version strings
-for tier in "${TIERS[@]}"; do
-    if [[ "${TIER_VERSIONS[$tier]}" == ,* ]]; then
-        TIER_VERSIONS[$tier]="${TIER_VERSIONS[$tier]:1}"
     fi
 done
 
@@ -394,7 +430,89 @@ cat > "$HTML_FILE" <<'HTMLEOF'
 
     <main>
         <div class="container">
-            <!-- Content will be inserted here -->
+HTMLEOF
+
+# Build tier sections directly into the HTML file
+has_any_versions=false
+
+for tier in "${TIERS[@]}"; do
+    tier_vers=$(get_tier_var "$tier" "VERSIONS")
+    if [[ -z "$tier_vers" ]]; then
+        continue
+    fi
+
+    has_any_versions=true
+    tier_label=$(capitalize_first "$tier")
+
+    cat >> "$HTML_FILE" <<EOF
+            <section class="tier-section tier-${tier}">
+                <div class="tier-header">
+                    <h2>${tier_label}</h2>
+                    <span class="tier-badge">${tier}</span>
+                </div>
+                <ul class="versions-list">
+EOF
+
+    tier_latest=$(get_tier_var "$tier" "LATEST")
+
+    IFS=',' read -ra VERSIONS_ARRAY <<< "$tier_vers"
+    for version in "${VERSIONS_ARRAY[@]}"; do
+        [[ -z "$version" ]] && continue
+
+        date_val=$(get_tier_data "$tier" "$version" "date")
+        formats=$(get_tier_data "$tier" "$version" "formats")
+        sha=$(get_tier_data "$tier" "$version" "sha")
+        sha_short="${sha:0:8}"
+
+        # Format the date for display (macOS date can't parse ISO8601 with -d; fall back gracefully)
+        display_date="$date_val"
+
+        # Determine if this is the latest version for this tier
+        LATEST_MARKER=""
+        if [[ "$version" == "$tier_latest" ]]; then
+            LATEST_MARKER="<span class=\"latest-badge\">Latest</span>"
+        fi
+
+        cat >> "$HTML_FILE" <<EOF
+                    <li class="version-item">
+                        <div class="version-header">
+                            <span class="version-number">v${version}</span>
+                            ${LATEST_MARKER}
+                        </div>
+                        <div class="version-meta">
+                            <div class="meta-item">
+                                <span class="meta-label">Released</span>
+                                <span class="meta-value">${display_date}</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Formats</span>
+                                <span class="meta-value">${formats}</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Git SHA</span>
+                                <span class="meta-value" title="${sha}">${sha_short}</span>
+                            </div>
+                        </div>
+                        <a href="s3://${S3_BUCKET}/${PLUGIN_NAME}/${tier}/${version}/" class="version-link">View Files</a>
+                    </li>
+EOF
+    done
+
+    cat >> "$HTML_FILE" <<'EOF'
+                </ul>
+            </section>
+EOF
+done
+
+if [[ "$has_any_versions" == false ]]; then
+    cat >> "$HTML_FILE" <<'EOF'
+            <div class="empty-state">
+                <p>No builds available yet. Deploy your first build using the deployment script.</p>
+            </div>
+EOF
+fi
+
+cat >> "$HTML_FILE" <<'EOF'
         </div>
     </main>
 
@@ -407,114 +525,18 @@ cat > "$HTML_FILE" <<'HTMLEOF'
     </script>
 </body>
 </html>
-HTMLEOF
-
-# Now we'll use a temp file to build the tiers HTML and insert it
-TIERS_HTML="$TEMP_DIR/tiers.html"
-> "$TIERS_HTML"
-
-for tier in "${TIERS[@]}"; do
-    if [[ -z "${TIER_VERSIONS[$tier]}" ]]; then
-        continue
-    fi
-
-    TIER_CLASS="tier-${tier}"
-
-    cat >> "$TIERS_HTML" <<EOF
-            <section class="tier-section $TIER_CLASS">
-                <div class="tier-header">
-                    <h2>${tier^}</h2>
-                    <span class="tier-badge">${tier}</span>
-                </div>
-                <ul class="versions-list">
 EOF
-
-    # Parse versions and iterate in order (already sorted newest first from S3)
-    IFS=',' read -ra VERSIONS_ARRAY <<< "${TIER_VERSIONS[$tier]}"
-    for version in "${VERSIONS_ARRAY[@]}"; do
-        if [[ -z "$version" ]]; then
-            continue
-        fi
-
-        date="${TIER_DATES[${tier}_${version}]:-unknown}"
-        formats="${TIER_FORMATS[${tier}_${version}]:-unknown}"
-        sha="${TIER_SHAS[${tier}_${version}]:-unknown}"
-
-        # Format the date for display
-        if [[ "$date" != "unknown" ]]; then
-            display_date=$(date -d "$date" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$date")
-        else
-            display_date="unknown"
-        fi
-
-        # Determine if this is the latest version for this tier
-        LATEST_MARKER=""
-        if [[ "$version" == "${TIER_LATEST[$tier]}" ]]; then
-            LATEST_MARKER="<span class=\"latest-badge\">Latest</span>"
-        fi
-
-        cat >> "$TIERS_HTML" <<EOF
-                    <li class="version-item">
-                        <div class="version-header">
-                            <span class="version-number">v${version}</span>
-                            $LATEST_MARKER
-                        </div>
-                        <div class="version-meta">
-                            <div class="meta-item">
-                                <span class="meta-label">Released</span>
-                                <span class="meta-value">$display_date</span>
-                            </div>
-                            <div class="meta-item">
-                                <span class="meta-label">Formats</span>
-                                <span class="meta-value">$formats</span>
-                            </div>
-                            <div class="meta-item">
-                                <span class="meta-label">Git SHA</span>
-                                <span class="meta-value" title="$sha">${sha:0:8}</span>
-                            </div>
-                        </div>
-                        <a href="s3://${S3_BUCKET}/${PLUGIN_NAME}/${tier}/${version}/" class="version-link">View Files</a>
-                    </li>
-EOF
-    done
-
-    cat >> "$TIERS_HTML" <<EOF
-                </ul>
-            </section>
-
-EOF
-done
-
-# Check if we have any tiers
-if [[ ! -s "$TIERS_HTML" ]] || [[ "$(grep -c 'version-item' "$TIERS_HTML" || true)" == "0" ]]; then
-    cat >> "$TIERS_HTML" <<EOF
-            <div class="empty-state">
-                <p>No builds available yet. Deploy your first build using the deployment script.</p>
-            </div>
-EOF
-fi
-
-# Insert tiers HTML into the main template
-sed -i "/<div class=\"container\">/r $TIERS_HTML" "$HTML_FILE"
 
 log_success "HTML index generated"
 
 # Generate JSON API file
 log_info "Generating builds.json API..."
 
-cat > "$JSON_FILE" <<'JSONEOF'
-{
-  "plugin_name": "",
-  "generated_at": "",
-  "tiers": {}
-}
-JSONEOF
-
-# Build JSON structure
 JSON_TIERS="{"
 first_tier=true
 for tier in "${TIERS[@]}"; do
-    if [[ -z "${TIER_VERSIONS[$tier]}" ]]; then
+    tier_vers=$(get_tier_var "$tier" "VERSIONS")
+    if [[ -z "$tier_vers" ]]; then
         continue
     fi
 
@@ -524,37 +546,34 @@ for tier in "${TIERS[@]}"; do
 
     JSON_TIERS+="\"$tier\": ["
     first_ver=true
-    IFS=',' read -ra VERSIONS_ARRAY <<< "${TIER_VERSIONS[$tier]}"
+    IFS=',' read -ra VERSIONS_ARRAY <<< "$tier_vers"
     for version in "${VERSIONS_ARRAY[@]}"; do
-        if [[ -z "$version" ]]; then
-            continue
-        fi
+        [[ -z "$version" ]] && continue
 
         if [[ "$first_ver" == false ]]; then
             JSON_TIERS+=","
         fi
 
-        date="${TIER_DATES[${tier}_${version}]:-unknown}"
-        formats="${TIER_FORMATS[${tier}_${version}]:-unknown}"
-        sha="${TIER_SHAS[${tier}_${version}]:-unknown}"
+        date_val=$(get_tier_data "$tier" "$version" "date")
+        formats=$(get_tier_data "$tier" "$version" "formats")
+        sha=$(get_tier_data "$tier" "$version" "sha")
 
-        # Build formats array
+        # Build formats JSON array
         formats_json="["
         fmt_first=true
-        IFS=',' read -ra FORMAT_ARRAY <<< "$formats"
+        IFS=', ' read -ra FORMAT_ARRAY <<< "$formats"
         for fmt in "${FORMAT_ARRAY[@]}"; do
-            fmt=$(echo "$fmt" | xargs) # trim whitespace
-            if [[ ! -z "$fmt" ]]; then
-                if [[ "$fmt_first" == false ]]; then
-                    formats_json+=","
-                fi
-                formats_json+="\"$fmt\""
-                fmt_first=false
+            fmt="${fmt## }"; fmt="${fmt%% }"  # trim whitespace
+            [[ -z "$fmt" ]] && continue
+            if [[ "$fmt_first" == false ]]; then
+                formats_json+=","
             fi
+            formats_json+="\"$fmt\""
+            fmt_first=false
         done
         formats_json+="]"
 
-        JSON_TIERS+="{\"version\":\"$version\",\"date\":\"$date\",\"formats\":$formats_json,\"git_sha\":\"$sha\"}"
+        JSON_TIERS+="{\"version\":\"$version\",\"date\":\"$date_val\",\"formats\":$formats_json,\"git_sha\":\"$sha\"}"
         first_ver=false
     done
     JSON_TIERS+="]"
