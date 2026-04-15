@@ -144,17 +144,24 @@ STAGING_DIR=$(mktemp -d -t bombest-deploy.XXXXXXXX)
 trap "rm -rf '$STAGING_DIR'" EXIT
 log_info "Staging directory: $STAGING_DIR"
 
-# Copy plugin binaries from build_dir to staging
-log_info "Copying plugin binaries from ${BUILD_DIR}..."
-if ! cp -r "$BUILD_DIR"/* "$STAGING_DIR/" 2>/dev/null; then
-    log_warn "No files found in build directory or copy had warnings"
-fi
+# Copy plugin bundles from build_dir to staging (only actual plugin formats, not CMake artifacts)
+log_info "Copying plugin bundles from ${BUILD_DIR}..."
+staged_count=0
+while IFS= read -r -d '' bundle; do
+    cp -r "$bundle" "$STAGING_DIR/"
+    log_info "  Staged: $(basename "$bundle")"
+    staged_count=$((staged_count + 1))
+done < <(find "$BUILD_DIR" -type d \( \
+    -name "*.vst3" -o -name "*.clap" -o \
+    -name "*.component" -o -name "*.aaxplugin" -o \
+    -name "*.app" \) -print0 2>/dev/null)
 
 # Check if anything was staged
-if [[ -z "$(find "$STAGING_DIR" -type f)" ]]; then
-    log_error "No files were staged. Check that build_dir contains plugin binaries."
+if [[ "$staged_count" -eq 0 ]]; then
+    log_error "No plugin bundles found in ${BUILD_DIR}. Run bombest-build.sh first."
     exit 1
 fi
+log_info "Staged ${staged_count} plugin bundle(s)"
 
 # Copy release notes if provided
 if [[ -n "$NOTES_FILE" ]]; then
