@@ -190,6 +190,9 @@ ZIP_PATH="${STAGING_DIR}/${ZIP_NAME}"
 (cd "$ZIP_STAGING" && zip -r "$ZIP_PATH" . -x "*.DS_Store") >/dev/null
 log_success "Created installer zip: ${ZIP_NAME} ($(du -sh "$ZIP_PATH" | cut -f1))"
 
+# Also stage INSTALL.txt at the root so S3 can serve it as a standalone file
+cp "$ZIP_STAGING/INSTALL.txt" "$STAGING_DIR/INSTALL.txt"
+
 # Copy release notes alongside (for the S3 index page)
 if [[ -n "$NOTES_FILE" ]]; then
     cp "$NOTES_FILE" "$STAGING_DIR/RELEASE_NOTES.md"
