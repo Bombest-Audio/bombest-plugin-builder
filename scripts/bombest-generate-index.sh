@@ -562,7 +562,7 @@ for tier in "${TIERS[@]}"; do
         formats_json="["
         fmt_first=true
         IFS=', ' read -ra FORMAT_ARRAY <<< "$formats"
-        for fmt in "${FORMAT_ARRAY[@]}"; do
+        for fmt in ${FORMAT_ARRAY[@]+"${FORMAT_ARRAY[@]}"}; do
             fmt="${fmt## }"; fmt="${fmt%% }"  # trim whitespace
             [[ -z "$fmt" ]] && continue
             if [[ "$fmt_first" == false ]]; then
