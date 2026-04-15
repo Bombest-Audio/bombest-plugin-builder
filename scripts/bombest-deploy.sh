@@ -144,47 +144,76 @@ STAGING_DIR=$(mktemp -d -t bombest-deploy.XXXXXXXX)
 trap "rm -rf '$STAGING_DIR'" EXIT
 log_info "Staging directory: $STAGING_DIR"
 
-# Copy plugin bundles from build_dir to staging (only actual plugin formats, not CMake artifacts)
-log_info "Copying plugin bundles from ${BUILD_DIR}..."
+# Bundle all plugin formats into a single downloadable zip
+log_info "Packaging plugin bundles from ${BUILD_DIR}..."
+ZIP_STAGING="${STAGING_DIR}/.zip_payload"
+mkdir -p "$ZIP_STAGING"
+
 staged_count=0
 while IFS= read -r -d '' bundle; do
-    cp -r "$bundle" "$STAGING_DIR/"
-    log_info "  Staged: $(basename "$bundle")"
+    cp -r "$bundle" "$ZIP_STAGING/"
+    log_info "  Added: $(basename "$bundle")"
     staged_count=$((staged_count + 1))
 done < <(find "$BUILD_DIR" -type d \( \
     -name "*.vst3" -o -name "*.clap" -o \
     -name "*.component" -o -name "*.aaxplugin" -o \
     -name "*.app" \) -print0 2>/dev/null)
 
-# Check if anything was staged
 if [[ "$staged_count" -eq 0 ]]; then
     log_error "No plugin bundles found in ${BUILD_DIR}. Run bombest-build.sh first."
     exit 1
 fi
-log_info "Staged ${staged_count} plugin bundle(s)"
 
-# Copy release notes if provided
+# Copy release notes into zip payload
+if [[ -n "$NOTES_FILE" ]]; then
+    cp "$NOTES_FILE" "$ZIP_STAGING/RELEASE_NOTES.md"
+fi
+
+# Write INSTALL.txt
+cat > "$ZIP_STAGING/INSTALL.txt" <<INSTALLEOF
+Far Away ${VERSION} — Installation
+
+Copy each file to its install location:
+
+  AU:         Far Away ${VERSION}-alpha.component  →  ~/Library/Audio/Plug-Ins/Components/
+  VST3:       Far Away ${VERSION}-alpha.vst3        →  ~/Library/Audio/Plug-Ins/VST3/
+  AAX:        Far Away ${VERSION}-alpha.aaxplugin   →  /Library/Application Support/Avid/Audio/Plug-Ins/
+  Standalone: Far Away ${VERSION}-alpha.app         →  /Applications/
+
+After copying, rescan plugins in your DAW.
+All formats are signed and notarized — no Gatekeeper prompts expected.
+INSTALLEOF
+
+# Create the zip
+ZIP_NAME="${PLUGIN_NAME}-${VERSION}-${TIER}.zip"
+ZIP_PATH="${STAGING_DIR}/${ZIP_NAME}"
+(cd "$ZIP_STAGING" && zip -r "$ZIP_PATH" . -x "*.DS_Store") >/dev/null
+log_success "Created installer zip: ${ZIP_NAME} ($(du -sh "$ZIP_PATH" | cut -f1))"
+
+# Copy release notes alongside (for the S3 index page)
 if [[ -n "$NOTES_FILE" ]]; then
     cp "$NOTES_FILE" "$STAGING_DIR/RELEASE_NOTES.md"
     log_info "Included release notes"
 fi
 
-# Gather file information for manifest (bash 3.2 compatible — no associative arrays)
+# Gather bundle information for manifest (scan bundle dirs, not files inside them)
 declare -a FILE_LIST
 COUNT_VST3=0; COUNT_CLAP=0; COUNT_AU=0; COUNT_AAX=0
 
-while IFS= read -r -d '' file; do
-    filename=$(basename "$file")
-    if [[ "$file" == *.vst3* ]]; then
-        COUNT_VST3=$((COUNT_VST3 + 1)); FILE_LIST+=("${filename}|vst3")
-    elif [[ "$file" == *.clap* ]]; then
-        COUNT_CLAP=$((COUNT_CLAP + 1)); FILE_LIST+=("${filename}|clap")
-    elif [[ "$file" == *.component* ]]; then
-        COUNT_AU=$((COUNT_AU + 1)); FILE_LIST+=("${filename}|au")
-    elif [[ "$file" == *.aaxplugin* ]]; then
-        COUNT_AAX=$((COUNT_AAX + 1)); FILE_LIST+=("${filename}|aax")
+while IFS= read -r -d '' bundle; do
+    dirname=$(basename "$bundle")
+    if [[ "$bundle" == *.vst3 ]]; then
+        COUNT_VST3=$((COUNT_VST3 + 1)); FILE_LIST+=("${dirname}|vst3")
+    elif [[ "$bundle" == *.clap ]]; then
+        COUNT_CLAP=$((COUNT_CLAP + 1)); FILE_LIST+=("${dirname}|clap")
+    elif [[ "$bundle" == *.component ]]; then
+        COUNT_AU=$((COUNT_AU + 1)); FILE_LIST+=("${dirname}|au")
+    elif [[ "$bundle" == *.aaxplugin ]]; then
+        COUNT_AAX=$((COUNT_AAX + 1)); FILE_LIST+=("${dirname}|aax")
     fi
-done < <(find "$STAGING_DIR" -type f -print0)
+done < <(find "${STAGING_DIR}/.zip_payload" -maxdepth 1 -type d \( \
+    -name "*.vst3" -o -name "*.clap" -o \
+    -name "*.component" -o -name "*.aaxplugin" \) -print0)
 
 # Build formats array for manifest
 FORMATS_JSON="["
@@ -223,37 +252,53 @@ cat "$MANIFEST_FILE" | jq '.' | sed 's/^/  /'
 # Generate release index.html — served when browser navigates to the version directory
 RELEASE_NOTES_HTML=""
 if [[ -n "$NOTES_FILE" ]]; then
-    # Convert markdown-ish notes to simple HTML paragraphs
+    # Convert markdown to simple HTML (bold, headings, bullets, paragraphs)
+    md_to_html() {
+        local line="$1"
+        # Convert **bold** → <strong>bold</strong>
+        line=$(echo "$line" | sed 's/\*\*\([^*]*\)\*\*/<strong>\1<\/strong>/g')
+        echo "$line"
+    }
+    in_list=false
     while IFS= read -r line; do
         if [[ -z "$line" ]]; then
-            RELEASE_NOTES_HTML+="<br>"
-        elif [[ "$line" == "##"* ]]; then
-            heading="${line###* }"
+            if [[ "$in_list" == true ]]; then
+                RELEASE_NOTES_HTML+="</ul>"
+                in_list=false
+            fi
+        elif [[ "$line" == "### "* ]]; then
+            [[ "$in_list" == true ]] && RELEASE_NOTES_HTML+="</ul>" && in_list=false
+            heading=$(md_to_html "${line#\#\#\# }")
+            RELEASE_NOTES_HTML+="<h4>${heading}</h4>"
+        elif [[ "$line" == "## "* ]]; then
+            [[ "$in_list" == true ]] && RELEASE_NOTES_HTML+="</ul>" && in_list=false
+            heading=$(md_to_html "${line#\#\# }")
             RELEASE_NOTES_HTML+="<h3>${heading}</h3>"
-        elif [[ "$line" == "-"* || "$line" == "*"* ]]; then
-            item="${line#[-*] }"
+        elif [[ "$line" == "- "* || "$line" == "* "* ]]; then
+            if [[ "$in_list" == false ]]; then
+                RELEASE_NOTES_HTML+="<ul>"
+                in_list=true
+            fi
+            item=$(md_to_html "${line#[-*] }")
             RELEASE_NOTES_HTML+="<li>${item}</li>"
         else
-            RELEASE_NOTES_HTML+="<p>${line}</p>"
+            [[ "$in_list" == true ]] && RELEASE_NOTES_HTML+="</ul>" && in_list=false
+            rendered=$(md_to_html "$line")
+            RELEASE_NOTES_HTML+="<p>${rendered}</p>"
         fi
     done < "$NOTES_FILE"
-    RELEASE_NOTES_HTML="<section class=\"notes\"><h2>Release Notes</h2><ul>${RELEASE_NOTES_HTML}</ul></section>"
+    [[ "$in_list" == true ]] && RELEASE_NOTES_HTML+="</ul>"
+    RELEASE_NOTES_HTML="<section class=\"notes\"><h2>Release Notes</h2>${RELEASE_NOTES_HTML}</section>"
 fi
 
-FORMATS_HTML=""
+# Build format tag list for display
+FORMAT_TAGS=""
 for pair in "vst3:$COUNT_VST3:VST3" "clap:$COUNT_CLAP:CLAP" "au:$COUNT_AU:AU" "aax:$COUNT_AAX:AAX"; do
     ext="${pair%%:*}"; rest="${pair#*:}"; cnt="${rest%%:*}"; label="${rest##*:}"
     [[ "$cnt" -eq 0 ]] && continue
-    # Find the matching bundle name
-    bundle_name=""
-    for entry in ${FILE_LIST[@]+"${FILE_LIST[@]}"}; do
-        if [[ "${entry##*|}" == "$ext" ]]; then
-            bundle_name="${entry%%|*}"
-            break
-        fi
-    done
-    FORMATS_HTML+="<div class=\"format\"><span class=\"badge\">${label}</span><span class=\"fname\">${bundle_name}</span></div>"
+    FORMAT_TAGS+="<span class=\"badge badge-format\">${label}</span> "
 done
+ZIP_SIZE=$(du -sh "$ZIP_PATH" | cut -f1)
 
 DISPLAY_DATE=$(echo "$ISO_DATE" | sed 's/T/ /' | sed 's/Z/ UTC/')
 TIER_UPPER=$(echo "$TIER" | tr '[:lower:]' '[:upper:]')
@@ -271,7 +316,7 @@ cat > "$STAGING_DIR/index.html" <<PAGEEOF
     .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 2.5rem; max-width: 640px; width: 100%; }
     .header { margin-bottom: 2rem; }
     h1 { font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 0.4rem; }
-    .meta { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    .meta { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
     .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
     .badge-alpha { background: #7c3f00; color: #ffb347; }
     .badge-release { background: #1a3d1a; color: #6fcf6f; }
@@ -279,12 +324,19 @@ cat > "$STAGING_DIR/index.html" <<PAGEEOF
     .badge-format { background: #2a2a2a; color: #aaa; }
     .date { font-size: 0.85rem; color: #666; }
     .sha { font-size: 0.8rem; color: #555; font-family: monospace; }
-    .formats { margin: 1.5rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
-    .format { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #222; border-radius: 6px; border: 1px solid #2a2a2a; }
-    .fname { font-family: monospace; font-size: 0.85rem; color: #bbb; }
+    .download-section { margin: 2rem 0; }
+    .download-btn { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.25rem; background: #1e3a5f; border: 1px solid #2a5080; border-radius: 8px; text-decoration: none; color: #fff; transition: background 0.15s; }
+    .download-btn:hover { background: #254d7a; text-decoration: none; }
+    .download-btn .btn-left { display: flex; flex-direction: column; gap: 0.3rem; }
+    .download-btn .btn-title { font-size: 1rem; font-weight: 600; }
+    .download-btn .btn-sub { font-size: 0.8rem; color: #7ab3e0; }
+    .download-btn .btn-size { font-size: 0.85rem; color: #7ab3e0; white-space: nowrap; }
+    .download-arrow { font-size: 1.4rem; color: #7ab3e0; }
+    .formats-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
     .notes { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #2a2a2a; }
     .notes h2 { font-size: 1rem; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1rem; }
     .notes h3 { font-size: 0.95rem; color: #ccc; margin: 0.75rem 0 0.4rem; }
+    .notes h4 { font-size: 0.9rem; color: #bbb; margin: 0.6rem 0 0.3rem; }
     .notes p, .notes li { font-size: 0.9rem; color: #aaa; line-height: 1.6; }
     .notes ul { padding-left: 1.2rem; }
     .notes li { margin-bottom: 0.3rem; }
@@ -296,7 +348,7 @@ cat > "$STAGING_DIR/index.html" <<PAGEEOF
 <body>
   <div class="card">
     <div class="header">
-      <h1>${PLUGIN_NAME} <span style="color:#666">v${VERSION}</span></h1>
+      <h1>Far Away <span style="color:#666">v${VERSION}</span></h1>
       <div class="meta">
         <span class="badge badge-${TIER}">${TIER_UPPER}</span>
         <span class="date">${DISPLAY_DATE}</span>
@@ -304,15 +356,24 @@ cat > "$STAGING_DIR/index.html" <<PAGEEOF
       </div>
     </div>
 
-    <div class="formats">
-${FORMATS_HTML}
+    <div class="download-section">
+      <a href="${ZIP_NAME}" class="download-btn" download>
+        <div class="btn-left">
+          <span class="btn-title">&#8595; Download ${ZIP_NAME}</span>
+          <span class="btn-sub">macOS · Signed &amp; Notarized · ${ZIP_SIZE}</span>
+        </div>
+        <span class="download-arrow">&#8659;</span>
+      </a>
+      <div class="formats-row">
+        ${FORMAT_TAGS}
+      </div>
     </div>
 
     ${RELEASE_NOTES_HTML}
 
     <div class="footer">
+      <span><a href="INSTALL.txt">INSTALL.txt</a></span>
       <span><a href="manifest.json">manifest.json</a></span>
-      <span><a href="RELEASE_NOTES.md">RELEASE_NOTES.md</a></span>
     </div>
   </div>
 </body>
@@ -342,6 +403,7 @@ else
     if aws s3 sync "$STAGING_DIR" "$S3_DEST" \
         --region "$S3_REGION" \
         --delete \
+        --exclude ".zip_payload/*" \
         --no-progress >/dev/null 2>&1; then
         log_success "Files uploaded successfully"
     else
