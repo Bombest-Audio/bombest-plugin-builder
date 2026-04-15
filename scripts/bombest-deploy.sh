@@ -220,6 +220,107 @@ log_success "Generated manifest.json"
 log_info "Manifest contents:"
 cat "$MANIFEST_FILE" | jq '.' | sed 's/^/  /'
 
+# Generate release index.html — served when browser navigates to the version directory
+RELEASE_NOTES_HTML=""
+if [[ -n "$NOTES_FILE" ]]; then
+    # Convert markdown-ish notes to simple HTML paragraphs
+    while IFS= read -r line; do
+        if [[ -z "$line" ]]; then
+            RELEASE_NOTES_HTML+="<br>"
+        elif [[ "$line" == "##"* ]]; then
+            heading="${line###* }"
+            RELEASE_NOTES_HTML+="<h3>${heading}</h3>"
+        elif [[ "$line" == "-"* || "$line" == "*"* ]]; then
+            item="${line#[-*] }"
+            RELEASE_NOTES_HTML+="<li>${item}</li>"
+        else
+            RELEASE_NOTES_HTML+="<p>${line}</p>"
+        fi
+    done < "$NOTES_FILE"
+    RELEASE_NOTES_HTML="<section class=\"notes\"><h2>Release Notes</h2><ul>${RELEASE_NOTES_HTML}</ul></section>"
+fi
+
+FORMATS_HTML=""
+for pair in "vst3:$COUNT_VST3:VST3" "clap:$COUNT_CLAP:CLAP" "au:$COUNT_AU:AU" "aax:$COUNT_AAX:AAX"; do
+    ext="${pair%%:*}"; rest="${pair#*:}"; cnt="${rest%%:*}"; label="${rest##*:}"
+    [[ "$cnt" -eq 0 ]] && continue
+    # Find the matching bundle name
+    bundle_name=""
+    for entry in ${FILE_LIST[@]+"${FILE_LIST[@]}"}; do
+        if [[ "${entry##*|}" == "$ext" ]]; then
+            bundle_name="${entry%%|*}"
+            break
+        fi
+    done
+    FORMATS_HTML+="<div class=\"format\"><span class=\"badge\">${label}</span><span class=\"fname\">${bundle_name}</span></div>"
+done
+
+DISPLAY_DATE=$(echo "$ISO_DATE" | sed 's/T/ /' | sed 's/Z/ UTC/')
+TIER_UPPER=$(echo "$TIER" | tr '[:lower:]' '[:upper:]')
+
+cat > "$STAGING_DIR/index.html" <<PAGEEOF
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${PLUGIN_NAME} v${VERSION} (${TIER})</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f0f0f; color: #e8e8e8; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem 1rem; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 2.5rem; max-width: 640px; width: 100%; }
+    .header { margin-bottom: 2rem; }
+    h1 { font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 0.4rem; }
+    .meta { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge-alpha { background: #7c3f00; color: #ffb347; }
+    .badge-release { background: #1a3d1a; color: #6fcf6f; }
+    .badge-dev { background: #1a1a3d; color: #6f9fcf; }
+    .badge-format { background: #2a2a2a; color: #aaa; }
+    .date { font-size: 0.85rem; color: #666; }
+    .sha { font-size: 0.8rem; color: #555; font-family: monospace; }
+    .formats { margin: 1.5rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
+    .format { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #222; border-radius: 6px; border: 1px solid #2a2a2a; }
+    .fname { font-family: monospace; font-size: 0.85rem; color: #bbb; }
+    .notes { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #2a2a2a; }
+    .notes h2 { font-size: 1rem; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1rem; }
+    .notes h3 { font-size: 0.95rem; color: #ccc; margin: 0.75rem 0 0.4rem; }
+    .notes p, .notes li { font-size: 0.9rem; color: #aaa; line-height: 1.6; }
+    .notes ul { padding-left: 1.2rem; }
+    .notes li { margin-bottom: 0.3rem; }
+    .footer { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #2a2a2a; font-size: 0.8rem; color: #555; display: flex; justify-content: space-between; }
+    a { color: #6f9fcf; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>${PLUGIN_NAME} <span style="color:#666">v${VERSION}</span></h1>
+      <div class="meta">
+        <span class="badge badge-${TIER}">${TIER_UPPER}</span>
+        <span class="date">${DISPLAY_DATE}</span>
+        <span class="sha">${GIT_SHA}</span>
+      </div>
+    </div>
+
+    <div class="formats">
+${FORMATS_HTML}
+    </div>
+
+    ${RELEASE_NOTES_HTML}
+
+    <div class="footer">
+      <span><a href="manifest.json">manifest.json</a></span>
+      <span><a href="RELEASE_NOTES.md">RELEASE_NOTES.md</a></span>
+    </div>
+  </div>
+</body>
+</html>
+PAGEEOF
+
+log_success "Generated index.html"
+
 # Build S3 path — optionally prefix with plugin name (set s3_plugin_prefix=false to omit)
 if [[ "$S3_PLUGIN_PREFIX" == "true" ]]; then
     S3_PATH="${PLUGIN_NAME}/${TIER}/${VERSION}/"
