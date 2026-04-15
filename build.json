@@ -5,16 +5,17 @@
   "cmake_generator": "Unix Makefiles",
   "cmake_extra_args": [],
 
-  "signing_identity_adhoc": "-",
+  "signing_identity_adhoc": "Developer ID Application: Bombest, LLC (8C4A8V568P)",
   "signing_identity_full": "Developer ID Application: Bombest, LLC (8C4A8V568P)",
   "installer_identity": "Developer ID Installer: Bombest, LLC (8C4A8V568P)",
   "apple_id": "thomasphillips3@gmail.com",
   "team_id": "8C4A8V568P",
   "notarization_keychain_profile": "bombest-notarize",
 
-  "s3_bucket": "bombest-releases",
+  "s3_bucket": "jftr-far-away-releases",
   "s3_region": "us-east-1",
-  "site_url": "https://bom.best/",
+  "s3_plugin_prefix": false,
+  "site_url": "http://jftr-far-away-releases.s3-website-us-east-1.amazonaws.com",
 
   "branches": {
     "release": "main",

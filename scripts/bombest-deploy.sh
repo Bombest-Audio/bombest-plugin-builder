@@ -51,6 +51,7 @@ BUILD_DIR=$(jq -r '.build_dir' "$BUILD_CONFIG")
 S3_BUCKET=$(jq -r '.s3_bucket' "$BUILD_CONFIG")
 S3_REGION=$(jq -r '.s3_region' "$BUILD_CONFIG")
 SITE_URL=$(jq -r '.site_url' "$BUILD_CONFIG")
+S3_PLUGIN_PREFIX=$(jq -r 'if .s3_plugin_prefix == false then "false" else "true" end' "$BUILD_CONFIG")
 
 # Validate required config values
 if [[ -z "$PLUGIN_NAME" || "$PLUGIN_NAME" == "null" ]]; then
@@ -212,15 +213,22 @@ log_success "Generated manifest.json"
 log_info "Manifest contents:"
 cat "$MANIFEST_FILE" | jq '.' | sed 's/^/  /'
 
+# Build S3 path — optionally prefix with plugin name (set s3_plugin_prefix=false to omit)
+if [[ "$S3_PLUGIN_PREFIX" == "true" ]]; then
+    S3_PATH="${PLUGIN_NAME}/${TIER}/${VERSION}/"
+else
+    S3_PATH="${TIER}/${VERSION}/"
+fi
+
 if [[ "$DRY_RUN" == true ]]; then
     log_warn "DRY RUN MODE: Showing what would be uploaded (not actually syncing)"
-    log_info "S3 destination: s3://${S3_BUCKET}/${PLUGIN_NAME}/${TIER}/${VERSION}/"
+    log_info "S3 destination: s3://${S3_BUCKET}/${S3_PATH}"
     log_info "Files to upload:"
     find "$STAGING_DIR" -type f | sed "s|^$STAGING_DIR/|  |"
     log_warn "DRY RUN: Skipping S3 sync"
 else
     # Upload to S3
-    S3_DEST="s3://${S3_BUCKET}/${PLUGIN_NAME}/${TIER}/${VERSION}/"
+    S3_DEST="s3://${S3_BUCKET}/${S3_PATH}"
     log_info "Syncing to S3: $S3_DEST"
 
     if aws s3 sync "$STAGING_DIR" "$S3_DEST" \
@@ -237,7 +245,7 @@ else
     LATEST_POINTER_FILE=$(mktemp)
     echo "$VERSION" > "$LATEST_POINTER_FILE"
 
-    if aws s3 cp "$LATEST_POINTER_FILE" "s3://${S3_BUCKET}/${PLUGIN_NAME}/${TIER}/latest.txt" \
+    if aws s3 cp "$LATEST_POINTER_FILE" "s3://${S3_BUCKET}/${TIER}/latest.txt" \
         --region "$S3_REGION" \
         --content-type "text/plain" >/dev/null 2>&1; then
         log_success "Updated latest.txt pointer"
@@ -276,13 +284,13 @@ else
 fi
 
 # Final report
-BUILD_URL="${SITE_URL}/builds/"
+BUILD_URL="${SITE_URL}/${TIER}/${VERSION}/"
 if [[ "$DRY_RUN" == true ]]; then
     log_warn "DRY RUN COMPLETE - No changes were made to S3"
 else
     log_success "Deployment complete!"
     log_info "Plugin available at: ${BUILD_URL}"
-    log_info "Direct S3 URL: s3://${S3_BUCKET}/${PLUGIN_NAME}/${TIER}/${VERSION}/"
+    log_info "Direct S3 URL: s3://${S3_BUCKET}/${S3_PATH}"
 fi
 
 exit 0
