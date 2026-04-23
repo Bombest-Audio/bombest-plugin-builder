@@ -93,8 +93,10 @@ bump_version() {
     echo "${major}.${minor}.${patch}"
 }
 
-# Find project root (directory containing build.json)
+# Find project root (directory containing build.json — the .bombest submodule dir)
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Plugin repo root (parent of .bombest/) — this is where CMakeLists.txt lives
+PLUGIN_PROJECT_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 BUILD_CONFIG_FILE="$PROJECT_ROOT/build.json"
 
 # Validate build.json exists
@@ -113,15 +115,19 @@ fi
 PLUGIN_NAME=$(jq -r '.plugin_name' "$BUILD_CONFIG_FILE")
 log_info "Plugin name: $PLUGIN_NAME"
 
-# CMakeLists.txt file location
-CMAKE_FILE="$PROJECT_ROOT/CMakeLists.txt"
+# CMakeLists.txt file location — in the consuming plugin repo, not the .bombest submodule
+CMAKE_FILE="$PLUGIN_PROJECT_ROOT/CMakeLists.txt"
 if [[ ! -f "$CMAKE_FILE" ]]; then
     log_error "CMakeLists.txt not found at $CMAKE_FILE"
     exit 1
 fi
 
-# Plugin info header (optional)
-PLUGIN_INFO_FILE="$PROJECT_ROOT/src/PluginInfo.h"
+# Plugin info header (optional) — check both common layouts
+if [[ -f "$PLUGIN_PROJECT_ROOT/Source/Version.h" ]]; then
+    PLUGIN_INFO_FILE="$PLUGIN_PROJECT_ROOT/Source/Version.h"
+else
+    PLUGIN_INFO_FILE="$PLUGIN_PROJECT_ROOT/src/PluginInfo.h"
+fi
 
 # Parse command line arguments
 COMMAND=""
@@ -169,7 +175,9 @@ fi
 
 # Extract current version from CMakeLists.txt
 # Look for PROJECT_VERSION or project(...VERSION...) statements
-CURRENT_VERSION=$(grep -oP 'PROJECT_VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+|project\([^)]*VERSION\s+\K[0-9]+\.[0-9]+\.[0-9]+' "$CMAKE_FILE" | head -n1)
+# Portable across BSD (macOS) and GNU sed — BSD grep has no -P.
+# Matches either `PROJECT_VERSION X.Y.Z` or `project(... VERSION X.Y.Z ...)`.
+CURRENT_VERSION=$(sed -nE 's/.*(PROJECT_VERSION|project\([^)]*VERSION)[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\2/p' "$CMAKE_FILE" | head -n1)
 
 if [[ -z "$CURRENT_VERSION" ]]; then
     log_warning "Could not determine current version from CMakeLists.txt"
@@ -206,7 +214,7 @@ if [[ "$COMMAND" == "status" ]]; then
     fi
     
     if [[ -f "$PLUGIN_INFO_FILE" ]]; then
-        PLUGIN_INFO_VERSION=$(grep -oP 'PLUGIN_VERSION_STRING\s+"v?\K[0-9]+\.[0-9]+\.[0-9]+' "$PLUGIN_INFO_FILE" 2>/dev/null || echo "")
+        PLUGIN_INFO_VERSION=$(sed -nE 's/.*PLUGIN_VERSION_STRING[[:space:]]+"v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' "$PLUGIN_INFO_FILE" 2>/dev/null | head -n1)
         if [[ -n "$PLUGIN_INFO_VERSION" ]]; then
             echo -e "PluginInfo.h:  ${CYAN}$PLUGIN_INFO_VERSION${NC}"
         fi
@@ -224,25 +232,24 @@ elif [[ "$COMMAND" == "set" ]]; then
     log_info "Setting version: $CURRENT_VERSION → $NEW_VERSION"
 fi
 
+# Portable in-place sed: `-i.bak` works on both BSD (macOS) and GNU sed,
+# and `-E` gives extended regex so `+`, `?`, `()` behave identically.
+# BSD grep has no `\s`/`\+` — use `[[:space:]]` and explicit `+` under `-E`.
+
 # Update CMakeLists.txt
 log_info "Updating CMakeLists.txt..."
 if ! grep -q "PROJECT_VERSION" "$CMAKE_FILE"; then
     log_warning "PROJECT_VERSION not found in CMakeLists.txt, looking for project() statement..."
-    # Try to update project(...VERSION...) statement
-    if grep -q 'project\([^)]*VERSION' "$CMAKE_FILE"; then
-        sed -i.bak "s/\(project([^)]*VERSION\s*\)[0-9]\+\.[0-9]\+\.[0-9]\+/\1$NEW_VERSION/" "$CMAKE_FILE"
+    if grep -qE 'project\([^)]*VERSION' "$CMAKE_FILE"; then
+        sed -i.bak -E "s/(project\([^)]*VERSION[[:space:]]+)[0-9]+\.[0-9]+\.[0-9]+/\1$NEW_VERSION/" "$CMAKE_FILE"
         rm -f "$CMAKE_FILE.bak"
     else
         log_error "Could not find PROJECT_VERSION or project(VERSION) in CMakeLists.txt"
         exit 1
     fi
 else
-    # Use sed to update PROJECT_VERSION
-    if [[ "$(uname)" == "Darwin" ]]; then
-        sed -i '' "s/\(PROJECT_VERSION\s*\)[0-9]\+\.[0-9]\+\.[0-9]\+/\1$NEW_VERSION/" "$CMAKE_FILE"
-    else
-        sed -i "s/\(PROJECT_VERSION\s*\)[0-9]\+\.[0-9]\+\.[0-9]\+/\1$NEW_VERSION/" "$CMAKE_FILE"
-    fi
+    sed -i.bak -E "s/(PROJECT_VERSION[[:space:]]+)[0-9]+\.[0-9]+\.[0-9]+/\1$NEW_VERSION/" "$CMAKE_FILE"
+    rm -f "$CMAKE_FILE.bak"
 fi
 
 log_success "CMakeLists.txt updated"
@@ -251,11 +258,8 @@ log_success "CMakeLists.txt updated"
 if [[ -f "$PLUGIN_INFO_FILE" ]]; then
     log_info "Updating PluginInfo.h..."
     if grep -q "PLUGIN_VERSION_STRING" "$PLUGIN_INFO_FILE"; then
-        if [[ "$(uname)" == "Darwin" ]]; then
-            sed -i '' "s/\(PLUGIN_VERSION_STRING\s*\"\)v\?[0-9]\+\.[0-9]\+\.[0-9]\+/\1$NEW_VERSION/" "$PLUGIN_INFO_FILE"
-        else
-            sed -i "s/\(PLUGIN_VERSION_STRING\s*\"\)v\?[0-9]\+\.[0-9]\+\.[0-9]\+/\1$NEW_VERSION/" "$PLUGIN_INFO_FILE"
-        fi
+        sed -i.bak -E "s/(PLUGIN_VERSION_STRING[[:space:]]+\")v?[0-9]+\.[0-9]+\.[0-9]+/\1$NEW_VERSION/" "$PLUGIN_INFO_FILE"
+        rm -f "$PLUGIN_INFO_FILE.bak"
         log_success "PluginInfo.h updated"
     else
         log_warning "PLUGIN_VERSION_STRING not found in PluginInfo.h, skipping update"
